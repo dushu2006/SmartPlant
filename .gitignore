@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+backend/dist/
+
+# Runtime data (never commit databases or secrets)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Coverage / test artifacts
+coverage/
+.nyc_output/
+
+# Legacy reference artifacts
+*.tmp
+
+# Python
+__pycache__/
+*.pyc

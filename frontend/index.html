@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SmartPlant — Plant Operations</title>
+  <link rel="icon" type="image/png" href="/images/logo.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Login screen -->
+    <section id="login-view" class="login-view hidden">
+      <div class="login-card">
+        <div class="login-head">
+          <img src="/images/logo.png" alt="SmartPlant" class="login-logo" />
+          <h1>SmartPlant</h1>
+          <p>AI + IoT + Maintenance + Operations</p>
+        </div>
+        <div id="demo-badge" class="badge badge-demo hidden">DEMO MODE</div>
+        <form id="login-form" autocomplete="off">
+          <label for="login-email">Email</label>
+          <input id="login-email" type="email" required placeholder="admin@smartplant.local" />
+          <label for="login-password">Password</label>
+          <input id="login-password" type="password" required placeholder="••••••••" />
+          <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+          <div id="login-error" class="form-error hidden"></div>
+        </form>
+        <details class="demo-hint" id="demo-hint">
+          <summary>Demo accounts (click to fill)</summary>
+          <div class="demo-users" id="demo-users"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- App shell -->
+    <div id="shell" class="shell hidden">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="/images/logo.png" alt="" class="brand-logo" />
+          <span>SmartPlant</span>
+        </div>
+        <nav id="nav" class="nav">
+          <a href="#/dashboard" data-view="dashboard">Dashboard</a>
+          <a href="#/machines" data-view="machines">Machines</a>
+          <a href="#/alerts" data-view="alerts">Alerts</a>
+          <a href="#/maintenance" data-view="maintenance">Maintenance</a>
+          <a href="#/parts" data-view="parts">Spare Parts</a>
+          <a href="#/ai" data-view="ai">AI Copilot</a>
+          <a href="#/reports" data-view="reports">Reports</a>
+          <a href="#/admin" data-view="admin" id="nav-admin" class="hidden">Admin</a>
+        </nav>
+        <div class="sidebar-foot">
+          <div id="demo-badge-shell" class="badge badge-demo hidden">DEMO</div>
+          <div class="user-chip">
+            <span id="user-name"></span>
+            <span id="user-role" class="role-tag"></span>
+          </div>
+          <button id="logout-btn" class="btn btn-ghost btn-block">Sign out</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <h2 id="page-title">Dashboard</h2>
+          <div class="topbar-right">
+            <span id="conn-status" class="conn-status" title="API connection"></span>
+          </div>
+        </header>
+        <div id="content" class="content"></div>
+      </main>
+    </div>
+
+    <!-- Generic modal -->
+    <div id="modal" class="modal-backdrop hidden">
+      <div class="modal">
+        <div id="modal-body"></div>
+        <div class="modal-actions" id="modal-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
