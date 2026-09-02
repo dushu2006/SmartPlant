@@ -198,6 +198,10 @@ function updateSpareRequest(id, fields) {
   return findSpareRequest(id);
 }
 
+function clearMachineParts(machineId) {
+  return db().prepare('DELETE FROM machine_parts WHERE machine_id = ?').run(machineId).changes;
+}
+
 module.exports = {
   findPart,
   findBySku,
@@ -207,6 +211,7 @@ module.exports = {
   adjustPartQty,
   compatiblePartIds,
   addMachinePart,
+  clearMachineParts,
   listPartsForMachine,
   lowStockParts,
   findSpareRequest,

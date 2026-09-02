@@ -108,7 +108,10 @@ async function complete({ system, messages, tools, maxTokens }) {
           messages,
           tools: (tools || []).map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
           tool_choice: 'auto',
-          max_tokens: config.aiMaxTokens,
+          max_tokens: maxTokens || config.aiMaxTokens,
+          temperature: config.aiTemperature,
+          top_p: config.aiTopP,
+          ...(config.aiSeed !== null ? { seed: config.aiSeed } : {}),
           ...config.openaiExtraBody,
         }),
       });

@@ -68,6 +68,10 @@ const config = {
 
   jwtSecret: process.env.JWT_SECRET || 'insecure-dev-secret-change-me',
   jwtTtlHours: num(process.env.JWT_TTL_HOURS, 12),
+  // Self-registration for production-like (no-demo) mode: first account on an
+  // empty database is always ADMIN; later accounts become WORKER. Disable
+  // after onboarding (ALLOW_REGISTRATION=false).
+  allowRegistration: bool(process.env.ALLOW_REGISTRATION, true),
   loginRateLimit: num(process.env.LOGIN_RATE_LIMIT, 10),
   loginRateWindowMin: num(process.env.LOGIN_RATE_WINDOW_MIN, 15),
 
@@ -83,14 +87,39 @@ const config = {
   aiMode: process.env.AI_MODE || 'auto', // auto | anthropic | openai | fallback
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
-  openaiApiKey: process.env.OPENAI_API_KEY || '',
-  openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-  openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
+  // OpenAI-compatible endpoint. NVIDIA NIM is supported directly:
+  //   NVIDIA_API_KEY / NVIDIA_BASE_URL / NVIDIA_MODEL are aliases, so the
+  //   official `$NVIDIA_API_KEY` environment variable works out of the box.
+  nvidiaBaseUrl: 'https://integrate.api.nvidia.com/v1',
+  openaiApiKey: process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY || '',
+  openaiModel: process.env.OPENAI_MODEL || process.env.NVIDIA_MODEL ||
+    (process.env.NVIDIA_API_KEY || process.env.NVIDIA_BASE_URL
+      ? 'deepseek-ai/deepseek-v4-pro-0813'
+      : 'gpt-4o-mini'),
+  // If only $NVIDIA_API_KEY is provided (the official SDK pattern), default to
+  // the NIM endpoint; otherwise default to OpenAI's public endpoint.
+  openaiBaseUrl: (
+    process.env.OPENAI_BASE_URL ||
+    process.env.NVIDIA_BASE_URL ||
+    (process.env.NVIDIA_API_KEY ? 'https://integrate.api.nvidia.com/v1' : 'https://api.openai.com/v1')
+  ).replace(/\/$/, ''),
   // Provider-specific extra body fields merged into every chat request
   // (e.g. NVIDIA NIM: {"chat_template_kwargs":{"thinking":false}}).
-  openaiExtraBody: parseJson(process.env.OPENAI_EXTRA_BODY, {}),
+  // When a NIM endpoint is configured without an explicit override, disable
+  // thinking automatically (required for reliable tool calling on NIM
+  // DeepSeek models).
+  openaiExtraBody: parseJson(
+    process.env.OPENAI_EXTRA_BODY,
+    String(process.env.OPENAI_BASE_URL || process.env.NVIDIA_BASE_URL || '').includes('nvidia.com') || process.env.NVIDIA_API_KEY
+      ? { chat_template_kwargs: { thinking: false } }
+      : {},
+  ),
+  // Sampling parameters (same knobs as the public SDK example).
+  aiTemperature: num(process.env.AI_TEMPERATURE, 1),
+  aiTopP: num(process.env.AI_TOP_P, 0.95),
+  aiSeed: process.env.AI_SEED === undefined || process.env.AI_SEED === '' ? null : num(process.env.AI_SEED, null),
   aiMaxToolIterations: num(process.env.AI_MAX_TOOL_ITERATIONS, 8),
-  aiMaxTokens: num(process.env.AI_MAX_TOKENS, 2048),
+  aiMaxTokens: num(process.env.AI_MAX_TOKENS, 16384),
   aiActionConfirmTtlMin: num(process.env.AI_ACTION_CONFIRM_TTL_MIN, 10),
 
   corsOrigins: (process.env.CORS_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean),

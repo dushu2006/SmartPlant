@@ -156,6 +156,54 @@ function createApp() {
   });
 
   // ------------------------------------------------------------ auth
+  // Public status: tells the frontend whether account creation is open and
+  // which AI engine is active (used for the login/registration screen).
+  app.get('/api/auth/status', (_req, res) => {
+    res.json({
+      data: {
+        demo_mode: config.demoMode,
+        seeded_demo_data: config.seedDemoData && usersStore.count() > 0,
+        registration_open: config.allowRegistration || usersStore.count() === 0,
+        ai_engine: require('./ai/llm').resolveEngine() || 'fallback-deterministic',
+      },
+    });
+  });
+
+  /**
+   * Self-registration. Only meaningful in production-like mode with no demo
+   * seed: the FIRST account on an empty database becomes ADMIN; later
+   * accounts become WORKER (or can be promoted via Admin → Users). Disable
+   * with ALLOW_REGISTRATION=false after onboarding.
+   */
+  app.post('/api/auth/register', (req, res, next) => {
+    try {
+      const { email, password, display_name } = req.body || {};
+      if (!email || !password || !display_name) throw errors.validation('email, display_name and password are required.');
+      if (usersStore.count() > 0 && !config.allowRegistration) {
+        throw errors.forbidden('Registration is disabled. Contact an administrator.');
+      }
+      if (String(password).length < 8) throw errors.validation('Password must be at least 8 characters.');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) throw errors.validation('Enter a valid email address.');
+      if (usersStore.findByEmail(email)) throw errors.conflict('A user with this email already exists.');
+
+      const firstUser = usersStore.count() === 0;
+      const role = firstUser ? 'ADMIN' : 'WORKER';
+      const { hashPassword } = require('./crypto');
+      const user = usersStore.create({
+        id: crypto.randomUUID(),
+        email: String(email).toLowerCase(),
+        passwordHash: hashPassword(password),
+        displayName: String(display_name).trim().slice(0, 60),
+        role,
+      });
+      audit({ actorId: user.id, action: 'USER.CREATE', entityType: 'user', entityId: user.id, after: { email: user.email, role: user.role, self_register: true } });
+      const result = auth.login({ email: user.email, password, ip: req.ip, userAgent: req.headers['user-agent'] });
+      res.status(201).json({ data: { ...result, first_user: firstUser } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post('/api/auth/login', (req, res, next) => {
     try {
       const { email, password } = req.body || {};
@@ -289,6 +337,20 @@ function createApp() {
   }
 
   // ------------------------------------------------------------ machines
+  app.post('/api/machines', auth.requireAuth, auth.requirePermission('machines.manage'), idempotent(wrap(async (req, res) => {
+    const machine = require('./services/machines').createMachine(req.body, req.user.id);
+    res.status(201).json({ data: machine });
+  })));
+
+  app.patch('/api/machines/:id', auth.requireAuth, auth.requirePermission('machines.manage'), wrap(async (req, res) => {
+    const machine = require('./services/machines').updateMachine(req.params.id, req.body, req.user.id);
+    res.json({ data: machine });
+  }));
+
+  app.delete('/api/machines/:id', auth.requireAuth, auth.requirePermission('machines.manage'), wrap(async (req, res) => {
+    res.json({ data: require('./services/machines').deleteMachine(req.params.id, req.user.id) });
+  }));
+
   app.get('/api/machines', auth.requireAuth, auth.requirePermission('machines.view'), wrap(async (req, res) => {
     const { page, pageSize } = pageParams(req);
     const result = machinesStore.list({ status: req.query.status, plantId: req.query.plant_id, search: req.query.search, page, pageSize });
@@ -793,6 +855,17 @@ function createApp() {
     if (req.body.locale !== undefined) fields.locale = req.body.locale;
     const updated = usersStore.update(req.user.id, fields);
     res.json({ data: updated });
+  }));
+
+  // ------------------------------------------------------------ team directory
+  // Lightweight staff listing for assignment pickers (called by the frontend
+  // for task / maintenance assignment). Only assign-capable roles can list it;
+  // it exposes no credentials or token info.
+  app.get('/api/team', auth.requireAuth, auth.requirePermission('tasks.assign'), wrap(async (req, res) => {
+    const result = usersStore.list({ status: 'ACTIVE', pageSize: 200 });
+    res.json({
+      data: result.rows.map((u) => ({ id: u.id, display_name: u.display_name, role: u.role, email: u.email })),
+    });
   }));
 
   // ------------------------------------------------------------ static frontend
