@@ -314,6 +314,33 @@ const TOOLS = [
     },
   },
   {
+    name: 'predict_machine',
+    description: 'Forecast for one machine: estimated shutdown time (when it will turn off/stop) with its basis and confidence, plus a failure outlook over the coming weeks (how likely it goes wrong soon) from health, alerts, history and trend. Honest estimate — not a validated failure probability.',
+    parameters: {
+      type: 'object',
+      properties: { machine_id: { type: 'string', description: 'Machine id or name' } },
+      required: ['machine_id'],
+    },
+    permission: 'ai.chat',
+    handler: (ctx, args) => {
+      const m = resolveMachine(args.machine_id);
+      if (!m) return { content: JSON.stringify({ error: 'Machine not found', hint: machineListSummary().map((x) => x.name) }), summary: 'machine not found' };
+      const forecast = analytics.machineForecast(m);
+      const latest = telemetryStore.latestForMachine(m.id);
+      return {
+        content: JSON.stringify({
+          ...forecast,
+          current: {
+            temperature_c: latest.temperature_c?.value ?? null,
+            power_kw: latest.power_kw?.value ?? null,
+            data_freshness_seconds: freshnessOf(latest),
+          },
+        }),
+        summary: `forecast for ${m.name}`,
+      };
+    },
+  },
+  {
     name: 'triage_ticket',
     description: 'Structure a free-text issue into machine, category, priority, symptoms and possible subsystems. Final priority always subject to business rules and human oversight.',
     parameters: {
@@ -332,6 +359,33 @@ const TOOLS = [
 
   // ------------------------------------------------------- ACTION TOOLS
   // These NEVER mutate during chat. They return a preview + confirm token.
+  {
+    name: 'generate_machines_from_description',
+    description: 'AI-designed plant layout: builds machine configurations (name, type, image, schedule, thresholds) from a natural-language description of equipment. Returns a preview; the user confirms before machines are created.',
+    parameters: {
+      type: 'object',
+      properties: { description: { type: 'string', description: 'e.g. "3 extruders, 1 milling machine and a packaging line"' } },
+      required: ['description'],
+    },
+    permission: 'machines.manage',
+    action: true,
+    handler: (ctx, args) => {
+      const machinesService = require('../services/machines');
+      const specs = machinesService.parseMachineDescription(args.description);
+      if (!specs.length) {
+        return { content: JSON.stringify({ error: 'Could not identify any machinery in that description. Describe equipment like "2 extruders and 1 conveyor".' }), summary: 'no machines parsed' };
+      }
+      return {
+        preview: {
+          kind: 'generate_machines_from_description',
+          label: `Create ${specs.length} machine(s): ${specs.map((s) => s.name).join(', ')}`,
+          params: { description: args.description, machines: specs },
+        },
+        content: JSON.stringify({ preview: 'generate_machines_from_description', count: specs.length, machines: specs.map((s) => ({ name: s.name, type: s.type, image: s.image, status: s.status, schedule: s.schedule })) }),
+        summary: `parsed ${specs.length} machine(s) from description`,
+      };
+    },
+  },
   {
     name: 'create_task',
     description: 'Schedule a maintenance task. Returns a preview that the user must confirm before it is created.',
@@ -447,6 +501,11 @@ function executeAction(kind, params, user) {
   }
 
   switch (kind) {
+    case 'generate_machines_from_description': {
+      const machinesService = require('../services/machines');
+      const specs = params.machines || machinesService.parseMachineDescription(params.description);
+      return specs.map((s) => machinesService.createMachine(s, user.id));
+    }
     case 'create_task': {
       const scheduling = require('../services/scheduling');
       return scheduling.createTask({

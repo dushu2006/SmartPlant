@@ -122,4 +122,8 @@ function allMachines() {
   return db().prepare('SELECT * FROM machines ORDER BY name').all().map(rowToMachine);
 }
 
-module.exports = { findById, findByExternalDevice, list, create, update, setStatus, listRunning, countByStatus, allMachines };
+function remove(id) {
+  return db().prepare('DELETE FROM machines WHERE id = ?').run(id).changes;
+}
+
+module.exports = { findById, findByExternalDevice, list, create, update, setStatus, remove, listRunning, countByStatus, allMachines };

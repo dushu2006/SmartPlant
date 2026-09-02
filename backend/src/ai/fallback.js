@@ -29,6 +29,12 @@ function freshnessNote(seconds) {
   return ` (latest reading ${Math.round(seconds / 60)} min old)`;
 }
 
+function fmtAgoMin(iso) {
+  if (!iso) return 'unknown time';
+  const min = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  return min < 1 ? 'moments ago' : `${min} min ago`;
+}
+
 function detectMachine(text) {
   const summary = machineListSummary();
   const lower = text.toLowerCase();
@@ -59,6 +65,32 @@ function runFallback({ message, user }) {
   const toolResults = [];
 
   // ------------------------------------------------------------ actions
+  // AI-designed plant layout: describe equipment → parsed machine configs
+  const hasMachines = machineListSummary().length > 0;
+  if (/(set ?up|create|generate|add|build|design|plan).*(machine|machines|plant|line|equipment|machinery|factory)/.test(lower) && !hasMachines || (/(set ?up|create|generate|build|design|plan).*(machine|machines|plant|line|equipment|machinery|factory)/.test(lower) && !/(task|inspection|maintenance|check)/.test(lower))) {
+    const res = toolCall('generate_machines_from_description', { description: message }, user);
+    if (!res.preview) {
+      return { reply: res.content, evidence, confidence: 'low', model: MODEL_VERSION, pendingActions };
+    }
+    pendingActions.push(res.preview);
+    toolResults.push(res);
+    evidence.push({ tool: 'generate_machines_from_description', summary: res.summary });
+    const parsed = safeParse(res.content) || {};
+    const names = (parsed.machines || []).map((m) => `- **${m.name}** (${m.type})`).join('\n');
+    return {
+      reply: `Here is the plant layout the AI generated from your description:\n\n${names}\n\nReview it and confirm below to create the machines. The machines start **OFF** — feed telemetry (Telemetry page) or set their status to start monitoring.`,
+      evidence, confidence: 'high', model: MODEL_VERSION, pendingActions,
+    };
+  }
+
+  // No machines configured yet → guide the user instead of empty answers.
+  if (!hasMachines && (/(machine|plant|fleet|telemetry|temperature|running|status|alert)/.test(lower))) {
+    return {
+      reply: 'There are **no machines configured yet**, so I have no live data to answer from.\n\nTwo ways to start:\n1. **AI-generated plant:** ask me — *"Set up my plant: 2 extruders and 1 conveyor"* — I will design the machines and you confirm.\n2. **Add manually:** go to *Machines → Add machine*, then send readings from the *Telemetry* page.\n\nEverything I answer about machines is generated from that real, live data — nothing is pre-loaded.',
+      evidence: [], confidence: 'high', model: MODEL_VERSION, pendingActions,
+    };
+  }
+
   // Create task (schedule … tomorrow, etc.)
   if (/(schedule|create|add|plan).*(task|inspection|maintenance|check)/.test(lower) || /(task|inspection).*(schedule|create|tomorrow)/.test(lower)) {
     const machine = detectMachine(lower) || machineListSummary()[0];
@@ -176,8 +208,9 @@ function runFallback({ message, user }) {
     }
   }
 
-  // Inventory / spare parts
-  if (/(spare|part|inventory|stock|have|available|reorder)/.test(lower)) {
+  // Inventory / spare parts (do NOT hijack "does it have any errors?").
+  const errorCheckQ = /(error|errors|fault|faults|alert|alerts|alarm|problem|issue|wrong|trouble)/.test(lower) && /(any|does|do|have|has|is there|are there)/.test(lower);
+  if (/(spare|part|inventory|stock|have|available|reorder|catalog|supplier)/.test(lower) && !errorCheckQ) {
     const machine = detectMachine(lower);
     const term = extractPartTerm(lower);
     const res = machine
@@ -238,12 +271,68 @@ function runFallback({ message, user }) {
     };
   }
 
-  // Machine status / "is X okay?"
-  const statusQ = /(status|okay|ok\?|running|fine|current|temperature|power|how is|is the)/.test(lower);
-  const hasMachineWord = machineListSummary().some((m) => lower.includes(m.name.toLowerCase())) || /machine|extruder|mixer|robot|conveyor|molder|mill|press|compressor|welding|lathe|cooling|packaging|palletizer|laser|bench/.test(lower);
+  // "when will X turn off / stop / shut down" — forecast first
+  const machineWord = /machine|extruder|mill|mixer|press|robot|molder|welding|conveyor|chip|clamp|pump|motor|feeder|gripper|camera|sensor|lathe|packaging|cooling|laser|palletizer|line|bench/.test(lower);
+  if ((/(when|what time|at what time|how long).*(turn|shut|switch|go off|stop|off|down)|(turn|shut|switch).*off|(stop running|shutdown|stop working|goes? off)/.test(lower)) && machineWord) {
+    const machine = detectMachine(lower);
+    if (machine) {
+      const res = toolCall('predict_machine', { machine_id: machine.id }, user);
+      toolResults.push(res);
+      const f = safeParse(res.content) || {};
+      evidence.push({ tool: 'predict_machine', summary: res.summary });
+      if (machine.status !== 'RUNNING') {
+        return {
+          reply: `**${machine.name}** is currently **${machine.status}** — it is not running, so there is no scheduled shutdown to estimate. Health score: ${f.health_score ?? '—'}/100.`,
+          evidence, confidence: 'high', model: MODEL_VERSION, pendingActions,
+        };
+      }
+      const when = f.estimated_off_at ? new Date(f.estimated_off_at).toLocaleString() : 'not enough telemetry to estimate yet';
+      return {
+        reply: `**${machine.name}** is expected to turn off around **${when}**.\n\n- Basis: ${f.estimated_off_basis || 'shift schedule / run pattern'}\n- Confidence: ${f.estimated_off_confidence || 'low'}\n- Current: ${fmt1(f.current?.temperature_c)} °C, ${fmt1(f.current?.power_kw)} kW${freshnessNote(f.current?.data_freshness_seconds)}\n\n*Estimate from the shift schedule and recent run pattern — not a guarantee.*`,
+        evidence, confidence: f.estimated_off_confidence === 'high' ? 'high' : 'medium', model: MODEL_VERSION, pendingActions,
+      };
+    }
+  }
+
+  // "will X go wrong / fail / break after some weeks?" — failure outlook
+  if ((/(go wrong|break|fail|failure|fault|stop working|problem).*(week|month|soon|later|future)|will.*(machine|extruder|mill|mixer|press|robot|molder|welding|conveyor|chip|clamp|pump|motor|feeder|gripper|camera|sensor|lathe|packaging|cooling|laser|palletizer|line|bench).*(go wrong|break|fail|fault|stop)|(week|month).*(go wrong|break|fail|fault)/.test(lower)) || (/(problem|wrong).*(weeks?|months?)/.test(lower) && machineWord)) {
+    const machine = detectMachine(lower);
+    if (machine) {
+      const res = toolCall('predict_machine', { machine_id: machine.id }, user);
+      toolResults.push(res);
+      const f = safeParse(res.content) || {};
+      evidence.push({ tool: 'predict_machine', summary: res.summary });
+      const s = f.signals || {};
+      return {
+        reply: `**${machine.name}** — failure outlook: **${f.failure_outlook_weeks || 'unknown'}** (deterioration index ${f.deterioration_index ?? '—'}/100, confidence ${f.outlook_confidence || 'low'}).\n\nSignals: ${s.active_alerts ?? 0} active alert(s), max severity ${s.alert_severity_max || 'INFO'}, ${s.failures_last_30d ?? 0} corrective/recent failure event(s) in the last 30 days, temperature trend ${fmt1(s.temperature_trend_per_hour)} °C/h. Health score: ${f.health_score ?? '—'}/100.\n\n⚠ Honest caveat: this is a heuristic estimate from health, alerts, telemetry trends and maintenance history — **not a validated failure probability**. ${f.caveat || ''}`,
+        evidence, confidence: 'medium', model: MODEL_VERSION, pendingActions,
+      };
+    }
+  }
+
+  // Machine status / "is X okay?" / "does it have errors?"
+  const statusQ = /(status|okay|ok\?|running|fine|current|temperature|power|how is|is the|error|errors|fault|alert|alarm|alerts|problem)/.test(lower);
+  const hasMachineWord = machineListSummary().some((m) => lower.includes(m.name.toLowerCase())) || machineWord;
   if (statusQ && hasMachineWord) {
     const machine = detectMachine(lower);
     if (machine) {
+      // "does this machine have any errors?" → emphasize alerts
+      if (/(error|errors|fault|faults|problem|issue|alert|alerts|alarm)/.test(lower) && /(any|does|have|has|is there|are there|check)/.test(lower)) {
+        const res = toolCall('get_active_alerts', { machine_id: machine.id }, user);
+        toolResults.push(res);
+        const alerts = safeParse(res.content) || [];
+        evidence.push({ tool: 'get_active_alerts', summary: res.summary });
+        if (!alerts.length) {
+          return {
+            reply: `**${machine.name}** has **no active errors or alerts** right now. Latest data: ${machine.temperature_c !== null && machine.temperature_c !== undefined ? `temp ${fmt1(machine.temperature_c)} °C` : 'temp —'}, health ${machine.health_score ?? '—'}/100.`,
+            evidence, confidence: 'high', model: MODEL_VERSION, pendingActions,
+          };
+        }
+        const lines = [`**${machine.name}** has **${alerts.length} active alert(s)/error(s):**`, ''];
+        for (const a of alerts) lines.push(`- [${a.severity}] ${a.type.replace(/_/g, ' ')} — ${a.message} (${fmtAgoMin(a.created_at)})`);
+        lines.push('', `*Evidence: get_active_alerts${freshnessNote(machine.data_freshness_seconds)}.*`);
+        return { reply: lines.join('\n'), evidence, confidence: 'high', model: MODEL_VERSION, pendingActions };
+      }
       const res = toolCall('get_machine_status', { machine_id: machine.id }, user);
       toolResults.push(res);
       const ov = safeParse(res.content);
@@ -274,6 +363,30 @@ function runFallback({ message, user }) {
         pendingActions,
       };
     }
+  }
+
+  // Fleet status — "which machines are running / online / list machines"
+  if (/(which|what|list|show|who).*(machine|running|online|status|operating)|(machine|fleet|plant).*(running|online|status|operating|active)/.test(lower)) {
+    const res = toolCall('list_machines', {}, user);
+    toolResults.push(res);
+    const machines = safeParse(res.content) || [];
+    evidence.push({ tool: 'list_machines', summary: res.summary });
+    if (!machines.length) {
+      return { reply: 'I could not retrieve the machine list.', evidence, confidence: 'low', model: MODEL_VERSION, pendingActions };
+    }
+    const groups = {};
+    for (const m of machines) (groups[m.status] = groups[m.status] || []).push(m);
+    const order = ['RUNNING', 'IDLE', 'FAULT', 'MAINTENANCE', 'OFFLINE', 'OFF'];
+    const lines = [`**Fleet status (${machines.length} machines):**`, ''];
+    for (const s of order) {
+      if (!groups[s]) continue;
+      lines.push(`**${s} (${groups[s].length})**`);
+      for (const m of groups[s]) {
+        lines.push(`- ${m.name} — health ${m.health_score}/100${m.temperature_c !== null ? `, temp ${m.temperature_c}°C` : ''}${freshnessNote(m.data_freshness_seconds)}`);
+      }
+      lines.push('');
+    }
+    return { reply: lines.join('\n').trim(), evidence, confidence: 'high', model: MODEL_VERSION, pendingActions };
   }
 
   // Risk / attention / predictive

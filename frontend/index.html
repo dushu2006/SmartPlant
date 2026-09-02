@@ -18,6 +18,7 @@
           <p>AI + IoT + Maintenance + Operations</p>
         </div>
         <div id="demo-badge" class="badge badge-demo hidden">DEMO MODE</div>
+        <div id="register-tag" class="badge badge-onboard hidden">FIRST SETUP — NO DEMO DATA</div>
         <form id="login-form" autocomplete="off">
           <label for="login-email">Email</label>
           <input id="login-email" type="email" required placeholder="admin@smartplant.local" />
@@ -26,7 +27,22 @@
           <button type="submit" class="btn btn-primary btn-block">Sign in</button>
           <div id="login-error" class="form-error hidden"></div>
         </form>
-        <details class="demo-hint" id="demo-hint">
+        <form id="register-form" class="hidden" autocomplete="off">
+          <label for="reg-name">Full name</label>
+          <input id="reg-name" type="text" required placeholder="Plant operator" />
+          <label for="reg-email">Email</label>
+          <input id="reg-email" type="email" required placeholder="you@company.com" />
+          <label for="reg-password">Password (min 8 characters)</label>
+          <input id="reg-password" type="password" required minlength="8" placeholder="••••••••" />
+          <button type="submit" class="btn btn-primary btn-block">Create account</button>
+          <div id="register-error" class="form-error hidden"></div>
+          <div class="muted small-note" id="register-note"></div>
+        </form>
+        <p class="auth-switch">
+          <span id="auth-note"></span>
+          <button type="button" class="link-btn" id="auth-toggle"></button>
+        </p>
+        <details class="demo-hint hidden" id="demo-hint">
           <summary>Demo accounts (click to fill)</summary>
           <div class="demo-users" id="demo-users"></div>
         </details>
@@ -43,12 +59,18 @@
         <nav id="nav" class="nav">
           <a href="#/dashboard" data-view="dashboard">Dashboard</a>
           <a href="#/machines" data-view="machines">Machines</a>
+          <a href="#/telemetry" data-view="telemetry" data-perm="telemetry.ingest">Telemetry</a>
           <a href="#/alerts" data-view="alerts">Alerts</a>
+          <a href="#/tasks" data-view="tasks">Tasks &amp; Schedule</a>
           <a href="#/maintenance" data-view="maintenance">Maintenance</a>
           <a href="#/parts" data-view="parts">Spare Parts</a>
+          <a href="#/documents" data-view="documents">Documents</a>
           <a href="#/ai" data-view="ai">AI Copilot</a>
+          <a href="#/insights" data-view="insights" data-perm="ai.insights.view">AI Insights</a>
           <a href="#/reports" data-view="reports">Reports</a>
-          <a href="#/admin" data-view="admin" id="nav-admin" class="hidden">Admin</a>
+          <a href="#/notifications" data-view="notifications">Notifications</a>
+          <a href="#/admin" data-view="admin" data-perm="users.view" id="nav-admin" class="hidden">Admin</a>
+          <a href="#/profile" data-view="profile">Profile &amp; Settings</a>
         </nav>
         <div class="sidebar-foot">
           <div id="demo-badge-shell" class="badge badge-demo hidden">DEMO</div>
@@ -64,6 +86,10 @@
         <header class="topbar">
           <h2 id="page-title">Dashboard</h2>
           <div class="topbar-right">
+            <a href="#/notifications" class="icon-btn" id="notif-btn" title="Notifications" aria-label="Notifications">
+              <span class="notif-bell">&#128276;</span>
+              <span id="notif-badge" class="notif-badge hidden">0</span>
+            </a>
             <span id="conn-status" class="conn-status" title="API connection"></span>
           </div>
         </header>
@@ -76,6 +102,39 @@
       <div class="modal">
         <div id="modal-body"></div>
         <div class="modal-actions" id="modal-actions"></div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <!-- Floating AI chatbot -->
+    <div id="chatbot" class="chatbot hidden">
+      <button id="chatbot-toggle" class="chatbot-toggle" title="Ask the AI Copilot" aria-label="Open AI chatbot">
+        <span class="chatbot-ico">🤖</span>
+      </button>
+      <div id="chatbot-panel" class="chatbot-panel hidden">
+        <div class="chatbot-head">
+          <div>
+            <b>AI Copilot</b>
+            <div class="muted" style="font-size:11px" id="chatbot-engine">live plant data</div>
+          </div>
+          <div class="flex">
+            <a class="link" href="#/ai" id="chatbot-open-full" style="font-size:12px">Full page</a>
+            <button class="icon-btn icon-btn-sm" id="chatbot-close" aria-label="Close">✕</button>
+          </div>
+        </div>
+        <div id="chatbot-log" class="chatbot-log"></div>
+        <div class="chatbot-chips" id="chatbot-chips">
+          <button class="chip" data-q="What is the temperature of the first machine?">Temp of the first machine</button>
+          <button class="chip" data-q="When will the first machine turn off?">When will it turn off?</button>
+          <button class="chip" data-q="Does the first machine have any errors?">Any errors?</button>
+          <button class="chip" data-q="Will the first machine go wrong after some weeks?">Will it fail in weeks?</button>
+        </div>
+        <div class="chatbot-input-row">
+          <input id="chatbot-input" placeholder="Ask about your machines…" />
+          <button class="btn btn-primary btn-sm" id="chatbot-send">Send</button>
+        </div>
       </div>
     </div>
   </div>

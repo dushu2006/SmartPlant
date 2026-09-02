@@ -229,6 +229,125 @@ function machineOverview(machine) {
   };
 }
 
+/**
+ * Machine forecast (grounded in schedule + telemetry + history):
+ *  - estimated shutdown ("when will it turn off")
+ *  - failure outlook over coming weeks ("will it go wrong after some weeks")
+ * Both are honest estimates based on deterministic indicators, never
+ * validated failure probabilities (PRD §39).
+ */
+function machineForecast(machine) {
+  const now = new Date();
+  const latest = telemetryStore.latestForMachine(machine.id);
+  const active = alertsStore.listActive({ machineId: machine.id, pageSize: 50 }).data;
+  const schedule = machine.schedule || {};
+
+  // ---------------- shutdown estimate -----------------------------------
+  let estimatedOffAt = null;
+  let offBasis = null;
+  let offConfidence = 'low';
+
+  if (machine.status === 'RUNNING') {
+    // 1) explicit shift window (e.g. { startTime: '08:00', sleepTime: '17:00' })
+    if (schedule.sleepTime) {
+      const [h, m] = String(schedule.sleepTime).split(':').map((n) => parseInt(n, 10));
+      if (Number.isFinite(h)) {
+        const off = new Date(now);
+        off.setUTCHours(h, Number.isFinite(m) ? m : 0, 0, 0);
+        if (off <= now) off.setUTCDate(off.getUTCDate() + 1);
+        estimatedOffAt = off.toISOString();
+        offBasis = `shift schedule (end ${schedule.sleepTime} UTC)`;
+        offConfidence = 'high';
+      }
+    }
+    // 2) fallback: typical daily runtime from the last 72h of power data
+    if (!estimatedOffAt) {
+      const from = new Date(Date.now() - 72 * 3600000).toISOString();
+      const rows = telemetryStore.readingsBetween(machine.id, 'power_kw', from, new Date().toISOString());
+      const running = rows.filter((r) => r.value > 0.5);
+      const dayStart = new Date();
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const todayRows = telemetryStore.readingsBetween(machine.id, 'power_kw', dayStart.toISOString(), new Date().toISOString());
+      const todayRunH = (todayRows.filter((r) => r.value > 0.5).length * 5) / 60;
+      if (running.length >= 12) {
+        const daysCovered = Math.max(0.25, (new Date() - new Date(rows[0].ts)) / 86400000);
+        const typicalRunH = (running.length * 5) / 60 / daysCovered;
+        const remainingH = Math.max(0, typicalRunH - todayRunH);
+        if (remainingH > 0.05) {
+          estimatedOffAt = new Date(Date.now() + remainingH * 3600000).toISOString();
+          offBasis = `typical runtime pattern (${typicalRunH.toFixed(1)}h/day from 72h of power readings; ${todayRunH.toFixed(1)}h today)`;
+          offConfidence = running.length >= 100 ? 'medium' : 'low';
+        } else {
+          estimatedOffAt = new Date().toISOString();
+          offBasis = 'today runtime already matches the typical daily pattern';
+          offConfidence = 'medium';
+        }
+      }
+    }
+    if (!estimatedOffAt) {
+      estimatedOffAt = null;
+      offBasis = 'insufficient telemetry history to estimate';
+    }
+  } else {
+    offBasis = `machine is currently ${machine.status} — not running`;
+  }
+
+  // ---------------- failure outlook --------------------------------------
+  const health = healthScore(machine);
+  let alertPenalty = 0;
+  for (const a of active) alertPenalty += { CRITICAL: 25, HIGH: 16, MEDIUM: 9, LOW: 4 }[a.severity] || 4;
+  const events = opsStore.listMaintenanceEvents({ machineId: machine.id, limit: 50 });
+  const last30d = events.filter((e) => e.completed_at && (Date.now() - new Date(e.completed_at).getTime()) / 86400000 <= 30);
+  const failures30d = last30d.filter((e) => ['FAILED', 'PARTIAL'].includes(e.outcome) || ['REPAIR', 'REPLACEMENT', 'CORRECTIVE'].includes(e.type)).length;
+
+  // temperature trend (per hour, last 60 min)
+  const temp = latest.temperature_c;
+  let trendPerHour = 0;
+  if (temp) {
+    const win = telemetryStore.rollingWindow(machine.id, 'temperature_c', 60);
+    if (win.length >= 12) {
+      const first = win[win.length - 12].value;
+      trendPerHour = ((temp.value - first) / 12) * 12;
+    }
+  }
+  const trendPenalty = Math.max(0, trendPerHour) > 2 ? Math.min(20, Math.max(0, trendPerHour) * 4) : 0;
+
+  const deterioration = Math.max(0, Math.min(100,
+    (100 - health) * 0.55 + alertPenalty * 0.8 + failures30d * 12 + trendPenalty,
+  ));
+
+  let band; // [weeksLow, weeksHigh | null for >]
+  if (deterioration >= 70) band = [0, 2];
+  else if (deterioration >= 50) band = [2, 4];
+  else if (deterioration >= 30) band = [4, 8];
+  else band = [8, 26];
+  const criticalNow = active.some((a) => a.severity === 'CRITICAL') || machine.status === 'FAULT';
+  if (criticalNow && band[0] > 0) band = [0, 2];
+
+  const outlookConfidence = telemetryStore.machineTimeRange(machine.id)?.min_ts ? 'medium' : 'low';
+
+  return {
+    machine_id: machine.id,
+    machine: machine.name,
+    status: machine.status,
+    health_score: health,
+    estimated_off_at: estimatedOffAt,
+    estimated_off_basis: offBasis,
+    estimated_off_confidence: offConfidence,
+    deterioration_index: Math.round(deterioration * 10) / 10,
+    failure_outlook_weeks: band[1] >= 26 ? `more than ${band[0]} weeks` : `${band[0]}–${band[1]} weeks`,
+    failure_outlook_horizon_at: band[1] >= 26 ? null : new Date(Date.now() + band[1] * 7 * 86400000).toISOString(),
+    outlook_confidence: outlookConfidence,
+    signals: {
+      active_alerts: active.length,
+      alert_severity_max: active.reduce((mx, a) => (({ INFO: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 }[a.severity] || 0) > ({ INFO: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 }[mx] || 0) ? a.severity : mx), 'INFO'),
+      failures_last_30d: failures30d,
+      temperature_trend_per_hour: Math.round(trendPerHour * 10) / 10,
+    },
+    caveat: 'Heuristic estimate from schedule, telemetry, health score, alert and maintenance history — not a validated failure probability.',
+  };
+}
+
 module.exports = {
   energyKwh,
   energyTodayKwh,
@@ -240,4 +359,5 @@ module.exports = {
   healthScore,
   riskAssessment,
   machineOverview,
+  machineForecast,
 };

@@ -8,11 +8,11 @@
     "node": ">=22.5.0"
   },
   "scripts": {
-    "setup": "npm --prefix backend install && npm --prefix frontend install",
-    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "setup": "npm --prefix backend install",
+    "install:all": "npm --prefix backend install",
     "dev:backend": "npm --prefix backend run dev",
-    "dev:frontend": "npm --prefix frontend run dev",
-    "build": "npm --prefix frontend run build",
+    "dev:frontend": "npm run build",
+    "build": "node -e \"const fs=require('fs'),p=require('path');fs.rmSync('frontend/dist',{recursive:true,force:true});fs.mkdirSync('frontend/dist/images',{recursive:true});for(const f of ['index.html','app.js','styles.css'])fs.copyFileSync(p.join('frontend',f),p.join('frontend/dist',f));for(const f of fs.readdirSync('images'))fs.copyFileSync(p.join('images',f),p.join('frontend/dist/images',f));console.log('frontend synced to frontend/dist')\"",
     "start": "npm --prefix backend run start",
     "test": "npm --prefix backend test",
     "eval": "npm --prefix backend run eval",
